@@ -36,9 +36,13 @@ model User {
   receivedMessages           Message[]      @relation("ReceivedMessages")
   verificationTokenCreatedAt DateTime?
   verificationTokenExpires   DateTime?
+  verificationSentSuccessfully Boolean @default(false) 
   verificationToken          String?
   refreshToken               RefreshToken[] // relation to tokens
   cartItems                  CartItem[]
+  views                      UserView[]
+  tickets   Ticket[]       @relation("CustomerTickets")
+  messages  TicketMessage[] @relation("UserMessages")
 
   googleId  String?  @unique
   createdAt DateTime @default(now())
@@ -59,6 +63,13 @@ model CartItem {
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  priceInKobo Int
+  basePriceInKobo Int
+
+  discountAppliedId     String?
+  discountAppliedType   String?
+  discountAppliedValue  Float?
+ 
 
   @@unique([userId, productId])
 }
@@ -86,6 +97,21 @@ model RefreshToken {
   expiresAt DateTime
 }
 
+model UserArchive {
+  id        String   @id @default(uuid())
+  userId    String
+  email     String
+  username  String
+  phone     String?
+  profilePic String?
+  googleId  String?
+  verified  Boolean
+  createdAt DateTime
+  deletedAt DateTime
+  deletedBy String?   // optional: admin or system
+}
+
+
 //product model
 model Product {
   id               String         @id @default(uuid())
@@ -93,11 +119,14 @@ model Product {
   description      String         @default("")
   tags             String[]       @default(["General"])
   category         String         @default("General")
+  subCategory      String? 
   images           ProductImage[]
   priceInKobo      Int
   quantity         Int            @default(1)
   stock            Int
   rating           Float          @default(0.0)
+  ratingCount      Int            @default(0)     // how many users rated
+  ratingSum        Int            @default(0)     // sum of received ratings
   isPopular        Boolean        @default(false)
   popularAt        DateTime?
   unitType         String         @default("piece")
@@ -106,7 +135,7 @@ model Product {
   createdById      String
   createdBy        User           @relation("UserProducts", fields: [createdById], references: [id])
   favorites        Favorite[]     @relation("ProductFavorites")
-  reviews          Review[] // ✅ add this line
+  reviews          Review[] 
   discountId       String?
   displayLabel     DisplayLabel   @default(NONE)
   discount         Discount?      @relation(fields: [discountId], references: [id])
@@ -114,7 +143,37 @@ model Product {
   updatedAt        DateTime       @updatedAt
   dailyDeals       DailyDeal[]
   cartItems        CartItem[]
+  userViews        UserView[]
+  promotions  PromotionProduct[]
+  soldCount        Int            @default(0)
+  reserved         Int            @default(0)
+
+  status           ProductStatus  @default(active) // ← new field
 }
+
+model UserView {
+  id        String   @id @default(uuid())
+
+  userId    String?
+  anonId    String?  // nullable
+  user      User?     @relation(fields: [userId], references: [id])
+
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+
+
+
+enum ProductStatus {
+  active
+  inactive
+  deleted
+}
+
+
 
 enum DisplayLabel {
   NONE
@@ -176,7 +235,7 @@ model ProductImage {
   publicId  String
   index     Int // Optional: helps track order
   productId String
-  product   Product  @relation(fields: [productId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 }
 
@@ -203,7 +262,9 @@ enum Status {
   active
   inactive
   banned
+  deleted
 }
+
 
 enum AuthProvider {
   local
@@ -216,6 +277,7 @@ enum OrderStatus {
   cancelled
   failed
   refunded
+  expired
 }
 
 enum FulfillmentStatus {
@@ -268,6 +330,11 @@ model Order {
   deliveryProvider    String?
   deliveryTrackingUrl String?
   createdAt           DateTime          @default(now())
+  updatedAt           DateTime  @updatedAt @default(now()) 
+  expiresAt           DateTime?   // optional: expiration for pending order
+
+  estimatedDeliveryStart DateTime?
+  estimatedDeliveryEnd   DateTime?
 }
 
 model ShippingRate {
@@ -317,13 +384,170 @@ model Message {
 }
 
 model AdminAlert {
-  id          String   @id @default(uuid())
-  type        String // e.g., "stock_alert", "system_error"
-  message     String
-  relatedItem String? // e.g., productId or orderId
-  createdAt   DateTime @default(now())
-  read        Boolean  @default(false)
+  id         String   @id @default(uuid())
+  type       String
+  title      String
+  message    String
+  entityId   String?
+  seen       Boolean  @default(false)
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now())
 }
+
+
+model BugReport {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  steps       String?
+  severity    String
+  contact     String?
+  fileUrl     String?
+  filePublicId String? 
+  status       BugStatus @default(UNRESOLVED) // 🆕 new field
+  createdAt   DateTime @default(now())
+}
+
+
+enum BugStatus {
+  UNRESOLVED
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum LogType {
+  AUTH
+  PURCHASE
+  SYSTEM
+  PAYMENT
+}
+
+enum LogLevel {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+model Log {
+  id          Int      @id @default(autoincrement())
+  type        LogType
+  level       LogLevel
+  message     String
+
+  userId      String?
+  referenceId String?
+
+  source      String?   // "login", "checkout", "webhook"
+  metadata    Json?
+
+  createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([level])
+  @@index([userId])
+  @@index([referenceId])
+}
+
+
+model Promotion {
+  id                 String    @id @default(uuid())
+  badgeText          String
+  headline           String
+  description        String
+  theme              Theme
+  startDate          DateTime
+  endDate            DateTime
+  isActive           Boolean   @default(false)
+  bannerImage        String?
+  featureOnHomepage  Boolean?  @default(false)
+  autoDeactivateOnExpire Boolean? @default(false)
+
+  // Optional relation to products
+  selectedProducts     PromotionProduct[]
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+
+model PromotionProduct {
+  id           String     @id @default(uuid())
+  promotionId  String
+  productId    String
+
+  promotion    Promotion  @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, productId])
+}
+
+
+enum Theme {
+  CHRISTMAS
+  BLACK_FRIDAY
+  VALENTINES
+  CUSTOM
+}
+
+//ticket table
+model Ticket {
+  id          String    @id @default(uuid())
+  customerId  String
+  customer    User      @relation("CustomerTickets", fields: [customerId], references: [id])
+  subject     String
+  category    TicketCategory
+  priority    TicketPriority
+  status      TicketStatus @default(open)
+  assignedTo  String?
+  messages    TicketMessage[] @relation("TicketMessages")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  adminLastReadAt   DateTime  @default(now())
+  customerLastReadAt DateTime @default(now())
+  @@map("tickets")
+}
+
+model TicketMessage {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation("TicketMessages", fields: [ticketId], references: [id])
+  senderId  String
+  sender    User     @relation("UserMessages", fields: [senderId], references: [id])
+  content   String
+  createdAt DateTime @default(now())
+
+  @@map("ticket_messages")
+}
+
+enum TicketCategory {
+  order_issue
+  payment
+  delivery
+  product_quality
+  account
+  refund
+  general
+}
+
+enum TicketPriority {
+  high
+  medium
+  low
+}
+
+enum TicketStatus {
+  open
+  pending
+  resolved
+  closed
+}
+
+
+
+
+
+
 
 //npx prisma format
 //npx prisma generate

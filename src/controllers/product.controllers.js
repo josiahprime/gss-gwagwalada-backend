@@ -142,9 +142,18 @@ export const updateProduct = async (req, res) => {
     isVariableWeight,
     minOrderQuantity,
     discountId, // ✅ added
+    deletedImageIds: _deletedImageIds,
   } = req.body;
 
-  console.log(req.body)
+  // console.log(req.body)
+
+  const deletedImageIds = _deletedImageIds
+  ? Array.isArray(_deletedImageIds)
+    ? _deletedImageIds
+    : [_deletedImageIds]
+  : [];
+
+  // console.log(req.body)
 
   const ALLOWED_UNIT_TYPES = ["piece", "kg", "litre", "pack", "dozen", "crate"];
   const normalizedUnitType = unitType?.toLowerCase();
@@ -255,6 +264,26 @@ export const updateProduct = async (req, res) => {
       discountAction = { discount: { disconnect: true } };
     }
 
+    if (deletedImageIds.length > 0) {
+      for (const imgId of deletedImageIds) {
+        const img = await prisma.productImage.findUnique({ where: { id: imgId } });
+        if (!img) continue;
+
+        // Delete from Cloudinary if it has a publicId
+        if (img.publicId) {
+          try {
+            await cloudinary.uploader.destroy(img.publicId);
+          } catch (err) {
+            console.warn("Failed to delete image from Cloudinary:", err);
+          }
+        }
+
+        // Delete from database
+        await prisma.productImage.delete({ where: { id: imgId } });
+      }
+    }
+
+
     // 🧩 Update product details
     const updatedProduct = await prisma.product.update({
       where: { id },
@@ -343,86 +372,61 @@ export const deleteProduct = async (req, res) => {
 
 
 
-
-
-
-
-
-// GET ALL PRODUCTS
-// export const getAllProducts = async (req, res) => {
-//   try {
-//     const { category, userId } = req.query; // ✅ read userId from query
-
-//     const cachedProducts = cache.get('products');
-//     if (cachedProducts) return res.json(cachedProducts);
-
-//     const filters = {};
-//     if (category) {
-//       filters.category = category;
-//     }
-
-//     // Fetch products
-//     const products = await prisma.product.findMany({
-//       where: filters,
-//       select: {
-//         id: true,
-//         productName: true,
-//         description: true,
-//         priceInKobo: true,
-//         discount: true,
-//         displayLabel: true,
-//         stock: true,
-//         unitType: true,
-//         isVariableWeight: true,
-//         minOrderQuantity: true,
-//         category: true,
-//         tags: true,
-//         images: {
-//           select: {
-//             id: true,
-//             url: true,
-//             index: true,
-//           },
-//         },
-//         // ✅ Pull favorites for this user only
-//         favorites: userId
-//           ? {
-//               where: { userId }, // filter favorites by current user
-//               select: { id: true },
-//             }
-//           : false,
-//       },
-//     });
-
-//     cache.set('products', products);
-
-//     // ✅ Map to include `isFavorite` boolean
-//     const enriched = products.map((p) => ({
-//       ...p,
-//       isFavorite: p.favorites && p.favorites.length > 0, // true if user has favorited
-//     }));
-
-//     res.status(200).json({ products: enriched });
-//     // console.log(enriched)
-//   } catch (err) {
-//     console.error("Error fetching products:", err);
-//     res.status(500).json({ error: "Failed to fetch products" });
-//   }
-// };
 export const getAllProducts = async (req, res) => {
   try {
-    const { category, userId } = req.query;
+    const {
+      category,
+      userId,
+      minPrice,
+      maxPrice,
+      limit,
+      cursor
+    } = req.query;
 
-    // ✅ Cache key includes userId and category
-    const cacheKey = `products:${userId || 'guest'}:${category || 'all'}`;
+    
+
+    // 🧠 Backend-enforced limits
+    const DEFAULT_LIMIT = 16;
+    const MAX_LIMIT = 50;
+
+    const take = Math.min(
+      Math.max(Number(limit) || DEFAULT_LIMIT, 1),
+      MAX_LIMIT
+    );
+
+    // ✅ Cache key includes limit
+    const cacheKey = `products:${userId || 'guest'}:${category || 'all'}:${minPrice || '0'}:${maxPrice || '∞'}:${cursor || 'start'}:${take}`;
     const cachedProducts = cache.get(cacheKey);
-    if (cachedProducts) return res.json({ products: cachedProducts });
+    if (cachedProducts) {
+      return res.json(cachedProducts);
+    }
 
+
+
+
+    // Build filters dynamically
     const filters = {};
     if (category) filters.category = category;
 
+    if (minPrice || maxPrice) {
+      filters.priceInKobo = {};
+      if (minPrice) filters.priceInKobo.gte = Number(minPrice);
+      if (maxPrice) filters.priceInKobo.lte = Number(maxPrice);
+    }
+
+    // Add a log in your backend to verify what it sees
+    console.log("Backend Limit received:", req.query.limit, "Calculated Take:", take);
+
+
+
     const products = await prisma.product.findMany({
       where: filters,
+      take,
+      // orderBy: { createdAt: "desc" },
+      // cursor: cursor ? { id: cursor } : undefined,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      cursor: cursor ? { id: cursor } : undefined,
+      skip: cursor ? 1 : 0,
       select: {
         id: true,
         productName: true,
@@ -437,27 +441,122 @@ export const getAllProducts = async (req, res) => {
         category: true,
         tags: true,
         images: { select: { id: true, url: true, index: true } },
-        favorites: userId
-          ? { where: { userId }, select: { id: true } }
-          : false,
       },
     });
 
-    const enriched = products.map((p) => ({
-      ...p,
-      isFavorite: p.favorites && p.favorites.length > 0,
-    }));
+    // const ids = products.map(p => p.id);
+    // const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
 
-    // ✅ Store enriched products in cache
-    cache.set(cacheKey, enriched);
+    // if (dupes.length) {
+    //   console.error("🚨 DUPLICATES IN BACKEND RESPONSE:", dupes);
+    // }else(
+    //   console.log('no duplicates found here')
+    // )
 
-    // console.log('response from products', enriched)
-    res.status(200).json({ products: enriched });
+
+
+
+    if (!products.length) {
+      return res.status(200).json({
+        products: [],
+        message: "No products found for this filter"
+      });
+    }
+
+    const nextCursor =
+      products.length === take
+        ? products[products.length - 1].id
+        : null;
+
+    if (!cursor) {
+      cache.set(cacheKey, { products, nextCursor });
+    }
+
+    
+
+    // products.map((p)=>{
+    //   console.log(p.productName)
+    // })
+
+
+
+    res.status(200).json({
+      products,
+      nextCursor
+    });
+
   } catch (err) {
     console.error("Error fetching products:", err);
     res.status(500).json({ error: "Failed to fetch products" });
   }
 };
+
+export const searchProducts = async (req, res) => {
+  try {
+    const { q, limit } = req.query;
+
+    if (!q || typeof q !== "string") {
+      return res.status(400).json({ products: [] });
+    }
+
+    const take = Math.min(Number(limit) || 10, 20);
+
+    const products = await prisma.product.findMany({
+      where: {
+        OR: [
+          { productName: { contains: q, mode: "insensitive" } },
+          { tags: { has: q } }
+        ]
+      },
+      take,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        productName: true,
+        description: true,
+        priceInKobo: true,
+        discount: true,
+        displayLabel: true,
+        stock: true,
+        unitType: true,
+        isVariableWeight: true,
+        minOrderQuantity: true,
+        category: true,
+        tags: true,
+        images: { select: { id: true, url: true, index: true } },
+      },
+    });
+
+    res.json({ products });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Search failed" });
+  }
+};
+
+
+
+
+
+export const getUserFavorites = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const favorites = await prisma.favorite.findMany({
+      where: { userId },
+      select: { productId: true },
+    });
+
+    // Return an array of product IDs
+    const favoriteIds = favorites.map(f => f.productId);
+    // console.log(favoriteIds)
+
+    res.status(200).json({ favoriteIds });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch favorites' });
+  }
+};
+
 
 
 
@@ -550,6 +649,7 @@ export const toggleFavorites = async (req, res) => {
   try {
     const { userId, productId } = req.body;
 
+
     const existing = await prisma.favorite.findUnique({
       where: { user_product_unique: { userId, productId } },
       include: {
@@ -563,6 +663,7 @@ export const toggleFavorites = async (req, res) => {
       await prisma.favorite.delete({
         where: { user_product_unique: { userId, productId } },
       });
+      console.log('favorite removed for', existing)
 
       return res.json({
         status: "removed",
@@ -577,6 +678,8 @@ export const toggleFavorites = async (req, res) => {
           },
         },
       });
+
+      // console.log('favorite', favorite)
 
       return res.json({
         status: "added",
@@ -615,6 +718,7 @@ export const fetchDailyDeals = async (req, res) => {
         images: {
           select: { url: true },
         },
+        // removed favorites
       },
       orderBy: {
         discount: {
@@ -626,7 +730,7 @@ export const fetchDailyDeals = async (req, res) => {
 
     console.log(`Daily deals fetched: ${products.length}`);
 
-    // ✅ Transform data to match frontend type EXACTLY
+    // Transform data for frontend
     const deals = products.map((p) => ({
       id: p.id,
       productName: p.productName,
@@ -641,26 +745,31 @@ export const fetchDailyDeals = async (req, res) => {
         endDate: p.discount.endDate,
       },
       images: p.images.map((img) => ({ url: img.url })),
+      // no isFavorite
     }));
 
-    // console.log(deals)
-
-  res.status(200).json({ dailyDeals: deals });
+    res.status(200).json({ dailyDeals: deals });
   } catch (err) {
     console.error("❌ Error fetching daily deals:", err);
-    return { success: false, error: "Internal server error" };
+    res.status(500).json({ error: "Internal server error" });
   }
 };
+
 
 // GET /api/holiday-deals
 export const fetchHolidayDeals = async (req, res) => {
   console.log("Fetching holiday deals...");
+  const userId = req.user?.id;
 
   try {
     const now = new Date();
     const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59); // Dec 31st
 
     // Fetch products with active HOLIDAY_SALE discount until Dec 31
+    const includeFavorites = userId
+    ? { favorites: { where: { userId }, select: { id: true } } }
+    : {};
+
     const products = await prisma.product.findMany({
       where: {
         discount: {
@@ -677,6 +786,7 @@ export const fetchHolidayDeals = async (req, res) => {
         images: {
           select: { url: true },
         },
+        ...includeFavorites,
       },
       orderBy: {
         discount: {
@@ -695,6 +805,7 @@ export const fetchHolidayDeals = async (req, res) => {
       description: p.description,
       priceInKobo: p.priceInKobo,
       unitType: p.unitType,
+      isFavorite: p.favorites?.length > 0 ? true : false,
       discount: {
         value: p.discount.value,
         type: p.discount.type,
@@ -716,7 +827,12 @@ export const fetchHolidayDeals = async (req, res) => {
 
 export const popularProducts = async (req, res) => {
   console.log('🔍 Fetching popular products...');
+  const userId = req.user?.id;
   try {
+    const includeFavorites = userId
+    ? { favorites: { where: { userId }, select: { id: true } } }
+    : {};
+
     const products = await prisma.product.findMany({
       where: { isPopular: true },
       take: 10,
@@ -725,13 +841,19 @@ export const popularProducts = async (req, res) => {
       },
       include: {
         images: true, // ✅ include product images directly
+        ...includeFavorites,
       },
     });
 
     
 
     // console.log('✅ Popular products:', products);
-    return res.status(200).json({ popularProducts: products });
+    const popularProductsResponse = products.map(p => ({
+      ...p,
+      isFavorite: p.favorites && p.favorites.length > 0,
+    }));
+
+    return res.status(200).json({ popularProducts: popularProductsResponse });
   } catch (error) {
     console.error("❌ Error fetching popular products:", error);
     return res.status(500).json({ message: "Server error" });

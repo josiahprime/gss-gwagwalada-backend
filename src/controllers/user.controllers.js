@@ -2,9 +2,14 @@ import User from '../models/user.model.js';
 import { prisma } from "../lib/prisma.js";
 
 // GET all users
-export const getAllUsers = async (req, res) => { 
+export const getAllUsers = async (req, res) => {
   try {
     const users = await prisma.user.findMany({
+      where: {
+        status: {
+          not: "deleted",
+        },
+      },
       select: {
         id: true,
         username: true,
@@ -14,15 +19,15 @@ export const getAllUsers = async (req, res) => {
         authProvider: true,
         profilePic: true,
         createdAt: true,
-        // 🔒 password not included
       },
     });
 
     res.json(users);
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch users' });
+    res.status(500).json({ message: "Failed to fetch users" });
   }
 };
+
 
 export const getCurrentUser =async (req, res) => {
   try {

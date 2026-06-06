@@ -7,7 +7,8 @@ import {
   updatePassword,
   updatePhone,
   updateAddress,
-  getUserAddress
+  getUserAddress,
+  deleteUser
 } from "../controllers/account.controller.js";
 
 
@@ -32,5 +33,7 @@ router.post("/update-phone", protectRoute, updatePhone);
 router.post("/update-address", protectRoute, updateAddress);
 
 router.get("/address", protectRoute, getUserAddress);
+
+router.delete("/:id", protectRoute, deleteUser)
 
 export default router;

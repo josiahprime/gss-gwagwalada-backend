@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "Order" ADD COLUMN     "expiresAt" TIMESTAMP(3),
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+-- AlterTable
+ALTER TABLE "Product" ADD COLUMN     "reserved" INTEGER NOT NULL DEFAULT 0;

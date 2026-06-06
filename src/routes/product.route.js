@@ -1,22 +1,36 @@
 import express from 'express'
 import { protectRoute } from '../middlewares/auth.middleware.js';
 import { isAdmin, isAuthenticated } from "../middlewares/roles.middleware.js";
-import { createProduct, deleteProduct, fetchDailyDeals, fetchFavorites, fetchHolidayDeals, getAllProducts, getProduct, popularProducts, toggleFavorites, updateProduct } from '../controllers/product.controllers.js';
+import { trackView } from '../tracking/trackView.js';
+import { createProduct, deleteProduct, fetchDailyDeals, fetchFavorites, fetchHolidayDeals, getAllProducts, getProduct, getUserFavorites, popularProducts, searchProducts, toggleFavorites, updateProduct } from '../controllers/product.controllers.js';
 import { uploadCreateImages, uploadUpdateImages } from '../middlewares/uploadProductImages.middleware.js';
+import { softAuth } from '../middlewares/softAuth.middleware.js';
 
 const router = express.Router();
 
 
 
-//update an existing product
-router.put('/:id', protectRoute, isAdmin, uploadUpdateImages,  updateProduct);
-//delete an existing product
-router.delete('/:id', protectRoute, isAdmin, deleteProduct)
+// track user views FIRST
+router.post("/:id/view", softAuth, trackView);
+
+router.get('/search', searchProducts);
+
+// update product
+router.put("/:id", protectRoute, isAdmin, uploadUpdateImages, updateProduct);
+
+// delete product
+router.delete("/:id", protectRoute, isAdmin, deleteProduct);
+
+
 //add a new product
 router.post('/add-product', protectRoute, isAdmin, uploadCreateImages, createProduct)
 
 //get all products
 router.get('/get-products', getAllProducts)
+
+
+
+router.get('/:userId/favorites/ids', protectRoute, getUserFavorites)
 
 router.get('/daily-deals', (req, res, next) => {
   console.log('➡️ /daily-deals route hit, forwarding to fetchDailyDeals');

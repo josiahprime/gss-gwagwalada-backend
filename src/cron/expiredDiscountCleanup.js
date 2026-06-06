@@ -5,27 +5,27 @@ const cleanExpiredDiscounts = async () => {
   try {
     console.log("🔁 Running expired discount cleanup...");
 
-    // Find all products whose discount endDate has passed
-    const expiredProducts = await prisma.product.findMany({
+    const now = new Date();
+
+    /**
+     * STEP 1
+     * Detach expired discounts from products
+     */
+    const productsWithExpiredDiscounts = await prisma.product.findMany({
       where: {
-        discount: { endDate: { lt: new Date() } },
+        discount: {
+          endDate: { lt: now },
+        },
       },
       include: { discount: true },
     });
 
-    if (!expiredProducts.length) {
-      console.log("⚠️ No expired discounts found.");
-      return;
-    }
-
-    for (const product of expiredProducts) {
-      // Remove discount from product
+    for (const product of productsWithExpiredDiscounts) {
       await prisma.product.update({
         where: { id: product.id },
         data: { discountId: null },
       });
 
-      // Set discount as inactive if it exists
       if (product.discount?.id) {
         await prisma.discount.update({
           where: { id: product.discount.id },
@@ -33,8 +33,27 @@ const cleanExpiredDiscounts = async () => {
         });
       }
 
-      console.log(`✅ Removed expired discount from product ${product.productName}`);
+      console.log(`✅ Detached expired discount from product: ${product.productName}`);
     }
+
+    /**
+     * STEP 2
+     * Delete expired discounts that are NOT tied to any products
+     * These discounts are safe to remove completely.
+     */
+    const deleted = await prisma.discount.deleteMany({
+      where: {
+        endDate: {
+          not: null,
+          lt: now,
+        },
+        products: {
+          none: {}, // <-- important: ensures no product references exist
+        },
+      },
+    });
+
+    console.log(`🧹 Deleted ${deleted.count} expired, unused discounts`);
   } catch (err) {
     console.error("❌ Error cleaning expired discounts:", err);
   }

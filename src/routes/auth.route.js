@@ -1,6 +1,6 @@
 import express from 'express';
 import passport from 'passport';  // Import passport
-import { checkAuth, login, logout, signup, updateProfile, requestPasswordReset, resetPassword, verifyEmailSignup, getToken, checkGoogleUser, logoutGoogleUser, fetchUser, refreshToken, verifySession, googleAuth } from '../controllers/auth.controllers.js';
+import { checkAuth, login, logout, signup, updateProfile, requestPasswordReset, resetPassword, verifyEmailSignup, getToken, checkGoogleUser, fetchUser, refreshToken, verifySession, googleAuth } from '../controllers/auth.controllers.js';
 import { signupLimiter, loginLimiter, resetPasswordLimiter } from '../controllers/auth.controllers.js';
 import { generateToken } from '../lib/utils.js';
 import { protectRoute } from '../middlewares/auth.middleware.js';
@@ -89,7 +89,7 @@ router.get('/google/callback', async (req, res, next) => {
 
 
 
-router.get('/google/logout', logoutGoogleUser)
+// router.get('/google/logout', logoutGoogleUser)
 
 
 

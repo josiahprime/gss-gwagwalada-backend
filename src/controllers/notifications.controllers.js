@@ -1,11 +1,12 @@
 import { prisma } from "../lib/prisma.js";
-import { getIO } from "../socket.js";
+import { getIO } from "../socket/index.js";
+import { emitNotification } from "../services/socketService.js";
 
 // Emit socket event to the user's room
-const emitNotification = (userId, notification) => {
-  const io = getIO();
-  io.to(userId.toString()).emit("newNotification", notification);
-};
+// const emitNotification = (userId, notification) => {
+//   const io = getIO();
+//   io.to(userId.toString()).emit("newNotification", notification);
+// };
 
 // 1. Order Placed
 export const sendOrderPlacedNotification = async (userId, orderId) => {

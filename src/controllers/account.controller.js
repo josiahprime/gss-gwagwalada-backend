@@ -1,8 +1,9 @@
 import { prisma } from "../lib/prisma.js";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import crypto from 'crypto';
 import { sendEmailChangeVerification } from "../lib/email.js";
 import { validatePhone } from "../lib/validatePhone.js";
+import logger from "../lib/logger.js";
 
 // 🔹 Change username
 export const changeUsername = async (req, res) => {
@@ -61,6 +62,14 @@ export const requestEmailChange = async (req, res) => {
     if (!user) {
       console.log("[Error] User not found:", userId);
       return res.status(404).json({ error: "User not found" });
+    }
+
+    // ✅ User exists but signed up with password before
+    if (user.authProvider === "local") {
+      return res.status(400).json({
+        success: false,
+        message: "This email is registered with a password. Please log in normally."
+      });
     }
 
     // ✅ Rate-limit / cooldown check
@@ -127,6 +136,14 @@ export const verifyEmailChange = async (req, res) => {
 
     if (!user) return res.status(400).json({ error: "Invalid or expired token" });
 
+    // ✅ User exists but signed up with password before
+    if (user.authProvider === "local") {
+      return res.status(400).json({
+        success: false,
+        message: "This email is registered with a password. Please log in normally."
+      });
+    }
+
     // Update the email and clear pending fields
     await prisma.user.update({
       where: { id: user.id },
@@ -167,6 +184,14 @@ export const updatePassword = async (req, res) => {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       return res.status(404).json({ message: "User not found." });
+    }
+
+    // ✅ User exists but signed up with password before
+    if (user.authProvider === "local") {
+      return res.status(400).json({
+        success: false,
+        message: "This email is registered with a password. Please log in normally."
+      });
     }
 
     // Verify current password
@@ -389,3 +414,81 @@ export const verifyPhoneOtp = async (req, res) => {
     res.status(500).json({ error: "Failed to verify OTP" });
   }
 };
+
+
+export const deleteUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Fetch the user
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        orders: true,
+        cartItems: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Block deletion if there are pending orders
+    if (user.orders.some((o) => o.status === "pending")) {
+      return res.status(400).json({
+        message: "User has pending orders and cannot be deleted",
+      });
+    }
+
+    // ✅ Archive the user
+    await prisma.userArchive.create({
+      data: {
+        userId: user.id,
+        email: user.email,
+        username: user.username,
+        phone: user.phone,
+        profilePic: user.profilePic,
+        googleId: user.googleId,
+        verified: user.verified,
+        createdAt: user.createdAt,
+        deletedAt: new Date(),
+        deletedBy: req.user?.id, // optional if using auth middleware
+      },
+    });
+
+    // Soft delete the user + anonymize PII
+    await prisma.user.update({
+      where: { id },
+      data: {
+        status: "deleted",
+        email: `deleted+${id}@example.com`,
+        username: `deleted_user_${id}`,
+        password: null,
+        phone: null,
+        profilePic: "",
+        profilePicPublicId: null,
+        googleId: null,
+        verified: false,
+      },
+    });
+
+    // Clean up related non-critical data
+    await prisma.$transaction([
+      prisma.cartItem.deleteMany({ where: { userId: id } }),
+      prisma.refreshToken.deleteMany({ where: { userId: id } }),
+      prisma.notification.deleteMany({ where: { userId: id } }),
+      prisma.message.deleteMany({ where: { OR: [{ senderId: id }, { receiverId: id }] } }),
+    ]);
+
+    logger.info(`User ${user.email} (ID: ${user.id}) soft-deleted successfully`);
+
+    return res.status(200).json({ message: "User soft-deleted successfully" });
+  } catch (err) {
+    console.error("Failed to soft-delete user:", err);
+    return res.status(500).json({ message: "Failed to soft-delete user" });
+  }
+};
+
+
+
+

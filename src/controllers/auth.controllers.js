@@ -1,5 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from 'crypto'
 import User from "../models/user.model.js";
@@ -7,13 +8,15 @@ import cloudinary from "../lib/cloudinary.js";
 import { generateToken } from "../lib/utils.js";
 import rateLimit from "express-rate-limit";
 import Joi from "joi";
-import winston from "winston";
 import signupSchema from "../validations/signupValidation.js";
 import dotenv from "dotenv";
 import sharp from "sharp";
 import streamifier from 'streamifier';
 import { COOKIE_OPTIONS, setCookie, clearCookie } from "../utils/cookieUtils.js";
 import axios from "axios";
+import { logEvent } from "../utils/logEvent.js";
+import { LogType, LogLevel } from '@prisma/client';
+
 
 import { OAuth2Client } from "google-auth-library"; 
 
@@ -21,7 +24,7 @@ import { generateVerificationToken, generatePasswordResetToken, generateAuthToke
 import { sendVerificationEmail, sendPasswordResetEmail } from "../lib/email.js";
 import { hashPassword, comparePasswords } from "../lib/password.js";
 import logger from "../lib/logger.js";
-import checkUserCount from "../lib/checkUserCount.js";
+// import checkUserCount from "../lib/checkUserCount.js";
 
 
 dotenv.config();
@@ -81,20 +84,67 @@ export const signup = async (req, res) => {
 
   const verifyUrl = `https://www.google.com/recaptcha/api/siteverify?secret=${secret}&response=${token}`;
 
-  const response = await axios.post(verifyUrl)
+  let data;
+
+  try {
+    const response = await axios.post(verifyUrl);
+    data = response.data;
+    void logEvent({
+      type: "AUTH",
+      level: "INFO",
+      message: "reCAPTCHA verification passed",
+      source: "signup",
+    });
+
+  } catch (err) {
+    void logEvent({
+      type: "SYSTEM",
+      level: "ERROR",
+      message: "reCAPTCHA verification request failed",
+      source: "signup",
+      metadata: {
+        error: err.message,
+      },
+    });
+
+    return res.status(503).json({
+      message: "Verification service unavailable. Please try again.",
+    });
+  }
+
   
-  const data = response.data;
+  // const data = response.data;
 
   
   if (!data.success) {
-    console.log('recaptcha failed')
+    void logEvent({
+      type: "AUTH",
+      level: "WARNING",
+      message: "Signup blocked due to failed reCAPTCHA",
+      source: "signup",
+      metadata: {
+        emailDomain: typeof email === "string" && email.includes("@")
+          ? email.split("@")[1].toLowerCase()
+          : null,
+      }
+    });
+
     return res.status(400).json({ message: 'reCAPTCHA verification failed.' });
   }
 
   
   const { error } = signupSchema.validate({ username, email, password });
   if (error) {
-    console.log('error in signup', error)
+    void logEvent({
+      type: "AUTH",
+      level: "INFO",
+      message: "Signup validation failed",
+      source: "signup",
+      metadata: {
+        field: error.details[0].path?.[0],
+      },
+    });
+
     return res.status(400).json({ message: error.details[0].message });
   }
 
@@ -102,10 +152,19 @@ export const signup = async (req, res) => {
 
   try {
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    console.log('user from signup',existingUser)
+    // console.log('user from signup',existingUser)
 
     if (existingUser) {
       if (existingUser.verified) {
+
+        void logEvent({
+          type: "AUTH",
+          level: "INFO",
+          message: "Signup attempt for already verified account",
+          userId: existingUser.id,
+          source: "signup",
+        });
+
         return res.status(409).json({
           message: 'You already have an account. Please log in instead.',
           redirectTo: '/login'
@@ -114,15 +173,24 @@ export const signup = async (req, res) => {
 
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      if (existingUser.verificationTokenCreatedAt > oneDayAgo) {
-        console.log('verification email already sent check your inbox')
+      if (existingUser.verificationTokenCreatedAt > oneDayAgo && existingUser.verificationSentSuccessfully) {
+        void logEvent({
+          type: "AUTH",
+          level: "INFO",
+          message: "Verification email recently sent, resend blocked",
+          userId: existingUser.id,
+          source: "signup",
+        });
+
+        // console.log('verification email already sent check your inbox')
         return res.status(400).json({
           message: 'Verification email was already sent recently. Please check your inbox.',
         });
       }
 
 
-      const verificationToken = generateVerificationToken(existingUser.email)
+      const verificationToken = generateVerificationToken(existingUser.email);
+      const sent = await sendVerificationEmail(existingUser.email, verificationToken);
 
       await prisma.user.update({
         where: { email },
@@ -130,45 +198,122 @@ export const signup = async (req, res) => {
           verificationToken,
           verificationTokenCreatedAt: new Date(),
           verificationTokenExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          verificationSentSuccessfully: sent,
         },
       });
 
+
+
       
-      await sendVerificationEmail(existingUser.email, verificationToken);
+      
+      void logEvent({
+        type: "AUTH",
+        level: sent ? "INFO" : "ERROR",
+        message: sent
+          ? "Verification email resent"
+          : "Failed to resend verification email",
+        userId: existingUser.id,
+        source: "signup",
+      });
 
       return res.status(200).json({
         message: 'Account is unverified. A new verification email has been sent.',
       });
     }
 
+    const existingUsername = await prisma.user.findUnique({ where: { username } });
+    if (existingUsername) {
+      return res.status(409).json({
+        message: `username ${username} already exists`,
+        username,
+      });
+    }
+    
+
     const hashedPassword = await hashPassword(password);
 
-    const userCount = await prisma.user.count(); // First user becomes admin
+    // const userCount = await prisma.user.count(); // First user becomes admin
+    
+   
 
-    const verificationToken = generateVerificationToken(email)
+    const verificationToken = generateVerificationToken(email);
 
-    await prisma.user.create({
+    const newUser = await prisma.user.create({
       data: {
         username,
         email,
         password: hashedPassword,
-        role: userCount === 0 ? 'admin' : 'customer',
+        role: "customer",
         verified: false,
-        status: 'active',
+        status: "active",
         verificationToken,
         verificationTokenCreatedAt: new Date(),
         verificationTokenExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        authProvider: 'local',
+        verificationSentSuccessfully: false,
+        authProvider: "local",
       },
     });
 
-    
-    await sendVerificationEmail(email, verificationToken);
+    const sent = await sendVerificationEmail(email, verificationToken);
+
+    if (!sent) {
+      void logEvent({
+        type: "AUTH",
+        level: "ERROR",
+        message: "Failed to send verification email to new user",
+        referenceId: newUser.id,
+        source: "signup",
+      });
+
+      // optional: still return 201 instead of 500
+      return res.status(201).json({
+        message: "User registered, but we couldn’t send a verification email. Try again later.",
+      });
+    }
+
+    await prisma.user.update({
+      where: { id: newUser.id },
+      data: { verificationSentSuccessfully: sent },
+    });
+
+    void logEvent({
+      type: "AUTH",
+      level: "INFO",
+      message: "Verification email sent to new user",
+      referenceId: newUser.id,
+      source: "signup",
+    });
+
 
     res.status(201).json({
-      message: "User registered successfully. A verification email has been sent.If you don't see it, please check your spam folder."
+      message: "User registered successfully. A verification email has been sent.",
     });
+
+
   } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      const field = err.meta?.target?.[0];
+
+      return res.status(409).json({
+        message: `${field} already exists`,
+        field,
+      });
+    }
+
+    void logEvent({
+      type: "SYSTEM",
+      level: "ERROR",
+      message: "Signup failed due to server error",
+      source: "signup",
+      metadata: {
+        error: err.message,
+        name: err.name,
+      }
+    });
+
     console.error('Signup Error:', err);
     res.status(500).json({ message: 'Internal server error. Please try again later.' });
   }
@@ -207,6 +352,14 @@ export const verifyEmailSignup = async (req, res) => {
       });
     }
 
+    // Check provider before checking password
+    if (user.authProvider === "google") {
+      logger.warn(`Login failed: attempted password login for Google account ${email}`);
+      return res.status(400).json({
+        message: "This account uses Google login. Please use the Google button."
+      });
+    }
+
     const success = await prisma.user.update({
       where: { email: userEmail },
       data: {
@@ -236,17 +389,51 @@ export const login = async (req, res) => {
 
   // Validate input
   const { error } = loginSchema.validate({ email, password });
-  if (error) return res.status(400).json({ message: error.details[0].message });
+  if (error) {
+    logEvent({
+      type: LogType.AUTH,
+      level: LogLevel.WARN,
+      message: "Login validation failed",
+      metadata: { email, reason: error.details[0].message }
+    }).catch(() => {});
+    return res.status(400).json({ message: error.details[0].message });
+  }
+
 
   try {
     // Find user in DB
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       logger.warn(`Login failed: no user found for email ${email}`);
+      logEvent({
+        type: LogType.AUTH,
+        level: LogLevel.WARN,
+        message: `Login failed: no user found`,
+        metadata: { email, ip: req.ip, userAgent: req.headers['user-agent'] }
+
+      }).catch(() => {});
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    // Check provider before checking password
+    if (user.authProvider === "google") {
+      logger.warn(`Login failed: attempted password login for Google account ${email}`);
+      return res.status(400).json({
+        message: "This account uses Google login. Please use the Google button."
+      });
+    }
+
+
     if (!user.verified) {
+      logEvent({
+        type: LogType.AUTH,
+        level: LogLevel.INFO,
+        message: "Login attempt with unverified email",
+        userId: user.id,
+        metadata: { email, ip: req.ip, userAgent: req.headers['user-agent'] }
+
+      }).catch(() => {});
+
       return res.status(403).json({ message: "Please verify your email before logging in." });
     }
 
@@ -254,16 +441,44 @@ export const login = async (req, res) => {
     const isMatch = await comparePasswords(password, user.password);
     if (!isMatch) {
       logger.warn(`Login failed: incorrect password for ${email}`);
+      logEvent({
+        type: LogType.AUTH,
+        level: LogLevel.WARN,
+        message: "Login failed: incorrect password",
+        userId: user.id,
+        metadata: { email, ip: req.ip, userAgent: req.headers['user-agent'] }
+
+      }).catch(() => {});
+
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
     // Generate tokens
     const { accessToken, refreshToken } = await generateToken(user.id, user.role);
 
+    logEvent({
+      type: LogType.AUTH,
+      level: LogLevel.INFO,
+      message: "Tokens generated",
+      userId: user.id,
+      metadata: { ip: req.ip, userAgent: req.headers['user-agent'] }
+    }).catch(() => {});
+
+
+
     // ✅ Only set refresh token in HttpOnly cookie
     setCookie(res, "refreshToken", refreshToken, { maxAge: 7 * 24 * 60 * 60 * 1000 }); // 7 days
 
     logger.info(`User ${user.email} logged in successfully.`);
+
+    logEvent({
+      type: LogType.AUTH,
+      level: LogLevel.INFO,
+      message: `User logged in successfully`,
+      userId: user.id,
+      metadata: { email: user.email, ip: req.ip, userAgent: req.headers['user-agent'] }
+    }).catch(() => {});
+
 
     // ✅ Send accessToken in JSON to be stored in memory on frontend
     res.status(200).json({
@@ -280,6 +495,14 @@ export const login = async (req, res) => {
     });
   } catch (error) {
     logger.error("Login error:", error);
+    logEvent({
+      type: LogType.AUTH,
+      level: LogLevel.ERROR,
+      message: "Login error",
+      metadata: { error: error.message, stack: error.stack }
+
+    }).catch(() => {});
+
     res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -505,6 +728,14 @@ export const setPassword = async (req, res) => {
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Check provider before checking password
+    if (user.authProvider === "google") {
+      logger.warn(`Login failed: attempted password login for Google account ${email}`);
+      return res.status(400).json({
+        message: "This account uses Google login. Please use the Google button."
+      });
+    }
+
     user.password = await bcrypt.hash(password, 10);
     user.authProvider = "local";
     await user.save();
@@ -555,42 +786,6 @@ export const logout = async (req, res) => {
   }
 };
 
-
-
-
-
-
-export const logoutGoogleUser = (req, res) => {
-  console.log("Attempting to log out...");
-  console.log("Incoming cookies:", req.cookies);
-  if (!req.cookies || Object.keys(req.cookies).length === 0) {
-    return res.status(400).json({ message: "Invalid or no cookies" });
-  }
-
-  // Destroy session if it exists
-  if (req.session) {
-    req.session.destroy(err => {
-      if (err) {
-        console.error("Session destruction failed:", err);
-        // Proceed to clear cookies anyway
-      }
-    });
-  }
-
-  // Clear cookies always
-  res.clearCookie('connect.sid', { path: '/' });
-  res.clearCookie('jwt', {
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: process.env.NODE_ENV !== 'development',
-    path: '/',
-  });
-
-  console.log("Session destroyed (if existed), cookies cleared.");
-
-  // Respond with success
-  return res.status(200).json({ message: 'Logged out successfully' });
-};
 
 
 export const updateProfile = async (req, res) => {
@@ -675,6 +870,14 @@ export const requestPasswordReset = async (req, res) => {
       return res.status(403).json({ message: 'Please verify your email before logging in.' });
     }
 
+    // Check provider before checking password
+    if (user.authProvider === "google") {
+      logger.warn(`Login failed: attempted password login for Google account ${email}`);
+      return res.status(400).json({
+        message: "This account uses Google login. Please use the Google button."
+      });
+    }
+
     const resetToken = crypto.randomBytes(32).toString("hex");
     const hashedToken = await bcrypt.hash(resetToken, 10);
     // console.log(`token before we encode it:`, resetToken)
@@ -725,6 +928,14 @@ export const resetPassword = async (req, res) => {
       return res.status(400).json({ message: "Invalid request" });
     }
 
+    // Check provider before checking password
+    if (user.authProvider === "google") {
+      logger.warn(`Login failed: attempted password login for Google account ${email}`);
+      return res.status(400).json({
+        message: "This account uses Google login. Please use the Google button."
+      });
+    }
+
     const isTokenValid = await comparePasswords(decoded.resetToken, user.resetToken);
     if (!isTokenValid) return res.status(400).json({ message: "Invalid request" });
 
@@ -750,8 +961,8 @@ export const resetPassword = async (req, res) => {
 // ✅ Check Auth
 export const checkAuth = (req, res) => {
   try {
-    const { id, username, email, authProvider, profilePic, phone, role } = req.user;
-    res.status(200).json({ id, username, email, authProvider, profilePic, phone, role });
+    const { id, username, email, authProvider, profilePic, phone, role, verified, createdAt } = req.user;
+    res.status(200).json({ id, username, email, authProvider, profilePic, phone, role, verified, createdAt });
   } catch (error) {
     logger.error("Check auth error:", error);
     res.status(500).json({ message: "Internal server error" });

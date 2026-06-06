@@ -21,6 +21,7 @@ const runHolidaySale = async () => {
     const products = await prisma.product.findMany({
       where: { discountId: null },
       orderBy: { createdAt: "desc" },
+      stock: { gt: 0 }, // only include products with stock
       take: 6
     });
 

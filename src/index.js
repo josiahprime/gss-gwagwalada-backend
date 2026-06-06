@@ -1,17 +1,17 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-import session from 'express-session';  // Required for Passport sessions
 import compression from 'compression';
 import cors from 'cors';
 import http from 'http';
 import './cron/popularProducts.js'
+import './cron/cleanupExpiredOrders.js'
 import './cron/expiredDiscountCleanup.js'
 import './cron/dailyDiscount.js'
-import { initSocket } from './socket.js'; // ✅
-import passport from 'passport';  // Import Passport
+import { initSocket } from './socket/index.js'; // ✅
 import './lib/passport.js'; // Ensure Passport strategies are loaded
 import authRoutes from './routes/auth.route.js';
+import recommendationRoutes from './routes/recommendation.route.js'
 import messageRoutes from './routes/message.route.js';
 import productRoutes from './routes/product.route.js'
 import payRoutes from './routes/pay.route.js';
@@ -22,6 +22,15 @@ import accountRoutes from './routes/account.route.js'
 import reviewRoutes from './routes/review.route.js'
 import discountRoutes from './routes/discount.route.js'
 import cartRoutes from './routes/cartRoutes.js'
+import bugReportRoutes from './routes/bugReportRoutes.js'
+import webhookRoute from './routes/webhook.route.js'
+import adminRoutes from './routes/adminRoutes.js'
+import revenueRoutes from './routes/revenueRoutes.js'
+import logRoutes from './routes/log.routes.js'
+import promotionRoutes from './routes/promotionRoutes.js'
+import adminAlertRoutes from './routes/adminAlertRoutes.js'
+import ticketRoutes from './routes/ticketRoutes.js'
+
 import { connectDB } from './lib/db.js';
 import { apiLimiter } from './rateLimiter.js';
 
@@ -49,7 +58,8 @@ initSocket(server); // ✅
 
 
 
-
+// Raw body for Paystack webhook
+app.use('/api', webhookRoute);
 
 // Middleware
 app.use(compression()); 
@@ -146,6 +156,50 @@ app.use('/api/discounts', (req, res, next)=>{
     console.log(`📢 Request received at /api/discounts: ${req.method} ${req.url}`);
     next();
 }, discountRoutes)
+
+
+app.use('/api/bug-report', (req, res, next)=>{
+    console.log(`📢 Request received at /api/bug-report: ${req.method} ${req.url}`);
+    next();
+}, bugReportRoutes)
+
+app.use('/api/recommendations', (req, res, next)=>{
+    console.log(`📢 Request received at /api/recommendations: ${req.method} ${req.url}`);
+    next();
+}, recommendationRoutes)
+
+app.use('/api/admin', (req, res, next)=>{
+    console.log(`📢 Request received at /api/admin: ${req.method} ${req.url}`);
+    next();
+}, adminRoutes)
+
+// app.use("/api/revenue", revenueRoutes);
+app.use('/api/revenue', (req, res, next)=>{
+    console.log(`📢 Request received at /api/revenue: ${req.method} ${req.url}`);
+    next();
+}, revenueRoutes)
+// app.use("/api/logs", logRoutes);
+app.use('/api/logs', (req, res, next)=>{
+    console.log(`📢 Request received at /api/logs: ${req.method} ${req.url}`);
+    next();
+}, logRoutes)
+
+app.use('/api/promotions', (req, res, next)=>{
+    console.log(`📢 Request received at /api/promotions: ${req.method} ${req.url}`);
+    next();
+}, promotionRoutes)
+
+app.use('/api/admin-alerts', (req, res, next)=>{
+    console.log(`📢 Request received at /api/admin-alerts: ${req.method} ${req.url}`);
+    next();
+}, adminAlertRoutes)
+
+app.use('/api/tickets', (req, res, next)=>{
+    console.log(`📢 Request received at /api/tickets: ${req.method} ${req.url}`);
+    next();
+}, ticketRoutes)
+
+
 
 // /api/server-time
 app.get('/api/server-time', (req, res) => {
