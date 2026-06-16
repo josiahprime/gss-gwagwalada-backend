@@ -36,6 +36,7 @@ import { apiLimiter } from './rateLimiter.js';
 
 dotenv.config();
 
+const go = "";
 const app = express();
 const PORT = process.env.PORT;
 const allowedOrigins = 
@@ -46,7 +47,7 @@ const allowedOrigins =
   'http://10.107.16.161:3000',
   'http://10.102.252.161:3000',
   'http://10.107.16.161:3000',
-    'https://richfieldfarmand.netlify.app',
+  'https://richfieldfarmand.netlify.app',
   'https://gssgwagwaladaconnect.netlify.app',
 ];
 
