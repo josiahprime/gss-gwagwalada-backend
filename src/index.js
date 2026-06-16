@@ -47,7 +47,7 @@ const allowedOrigins =
   'http://10.102.252.161:3000',
   'http://10.107.16.161:3000',
     'https://richfieldfarmand.netlify.app',
-  'https://gssgwagwaladaconnect.netlify.app',
+  'https://gssgwagwaladaconnect.netlify.app/',
 ];
 
 
@@ -59,8 +59,7 @@ initSocket(server); // ✅
 
 
 
-// Raw body for Paystack webhook
-app.use('/api', webhookRoute);
+
 
 // Middleware
 app.use(compression()); 
@@ -90,6 +89,8 @@ app.use((req, res, next) => {
   console.log('Incoming request:', req.method, req.url);
   next();
 });
+
+app.use('/api', webhookRoute);
 
 
 // Apply rate limiter to all /api routes
