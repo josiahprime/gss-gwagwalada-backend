@@ -74,9 +74,22 @@ export const createTicket = async (req, res) => {
   const userRole = req.user.role;
 
   const { subject, category, priority, message } = req.body;
+  // console.log("📦 BODY RECEIVED BY BACKEND:", req.body);
   
-  if (!subject || !category || !priority || !message) {
-    return handleError(res, 'Missing required fields', 400);
+  // Create an array to catch everything that might be missing
+  const missingFields = [];
+  if (!subject) missingFields.push('subject');
+  if (!category) missingFields.push('category');
+  if (!priority) missingFields.push('priority');
+  if (!message) missingFields.push('message');
+
+  // If anything is missing, tell the frontend exactly what it is
+  if (missingFields.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: `Missing required fields: ${missingFields.join(', ')}`,
+      missingFields: missingFields // The frontend can map over this array!
+    });
   }
 
   try {

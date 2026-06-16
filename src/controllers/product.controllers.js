@@ -414,6 +414,8 @@ export const getAllProducts = async (req, res) => {
       if (maxPrice) filters.priceInKobo.lte = Number(maxPrice);
     }
 
+    filters.visibility = "VISIBLE";
+
     // Add a log in your backend to verify what it sees
     console.log("Backend Limit received:", req.query.limit, "Calculated Take:", take);
 
@@ -444,14 +446,6 @@ export const getAllProducts = async (req, res) => {
       },
     });
 
-    // const ids = products.map(p => p.id);
-    // const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
-
-    // if (dupes.length) {
-    //   console.error("🚨 DUPLICATES IN BACKEND RESPONSE:", dupes);
-    // }else(
-    //   console.log('no duplicates found here')
-    // )
 
 
 
@@ -472,11 +466,6 @@ export const getAllProducts = async (req, res) => {
       cache.set(cacheKey, { products, nextCursor });
     }
 
-    
-
-    // products.map((p)=>{
-    //   console.log(p.productName)
-    // })
 
 
 
@@ -705,6 +694,7 @@ export const fetchDailyDeals = async (req, res) => {
     // Fetch products with active discounts expiring within 24 hours
     const products = await prisma.product.findMany({
       where: {
+        visibility: 'VISIBLE',
         discount: {
           is: {
             startDate: { lte: now },
@@ -834,7 +824,10 @@ export const popularProducts = async (req, res) => {
     : {};
 
     const products = await prisma.product.findMany({
-      where: { isPopular: true },
+      where: {
+        visibility: 'VISIBLE',
+        isPopular: true
+      },
       take: 10,
       orderBy: {
         popularAt: 'desc',

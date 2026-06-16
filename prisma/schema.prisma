@@ -149,6 +149,12 @@ model Product {
   reserved         Int            @default(0)
 
   status           ProductStatus  @default(active) // ← new field
+  visibility       VisibilityStatus @default(VISIBLE)
+}
+
+enum VisibilityStatus {
+  VISIBLE
+  HIDDEN
 }
 
 model UserView {
