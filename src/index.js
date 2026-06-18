@@ -39,6 +39,9 @@ dotenv.config();
 const go = "";
 const app = express();
 const PORT = process.env.PORT;
+
+app.set("trust proxy", 1);
+
 const allowedOrigins = 
 [
   'http://localhost:5173', 
@@ -74,6 +77,11 @@ app.use(
     // origin: allowedOrigins,
     origin: function (origin, callback) {
       console.log("🔍 Request origin:", origin);
+
+      // 🔓 FAST BYPASS: If you want to accept anything from anywhere right now,
+      // just uncomment the line below:
+      return callback(null, true);
+      
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) {
         callback(null, true);
